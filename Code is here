@@ -1,0 +1,115 @@
+import speech_recognition as sr
+from googleapiclient.discovery import build
+from google.cloud import texttospeech
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.naive_bayes import MultinomialNB
+
+# ตั้งค่าสำหรับ Google Custom Search API และ Text-to-Speech
+CSE_API_KEY = 'AIzaSyDdGR6se-_C2i7BHvyqEetCknlTyf5Gqq4'
+CSE_ENGINE_ID = 'a4b1863102f57431f'
+TTS_CLIENT = texttospeech.TextToSpeechClient()
+
+# สร้าง DataFrame ว่างสำหรับเก็บข้อมูล
+data = []
+
+# สร้างตัวแปร token สำหรับเก็บคะแนน
+tokens = 0
+
+def recognize_speech():
+    """รับเสียงพูดจากผู้ใช้และแปลงเป็นข้อความ"""
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        print("พูดอะไรก็ได้...")
+        audio = recognizer.listen(source)
+
+    try:
+        query = recognizer.recognize_google(audio, language='th')  # ตั้งค่าภาษาเป็นไทย
+        print(f"คุณพูดว่า: {query}")
+        return query
+    except sr.UnknownValueError:
+        print("ขอโทษครับ ไม่เข้าใจที่คุณพูด")
+        return None
+    except sr.RequestError as e:
+        print(f"เกิดข้อผิดพลาดในการเชื่อมต่อกับ Google Speech Recognition service; {e}")
+        return None
+
+def search_google(query):
+    """ส่งคำค้นหาไปยัง Google และรับผลลัพธ์"""
+    service = build("customsearch", "v1", developerKey=CSE_API_KEY)
+    result = service.cse().list(q=query, cx=CSE_ENGINE_ID).execute()
+    return result['items'][0]['snippet']  # ดึงข้อมูลสรุปจากผลลัพธ์แรก
+
+def speak_text(text):
+    """แปลงข้อความเป็นเสียงพูด"""
+    synthesis_input = texttospeech.SynthesisInput(text=text)
+    voice = texttospeech.VoiceSelectionParams(
+        language_code="th-TH", ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
+    )
+    audio_config = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.MP3
+    )
+    response = TTS_CLIENT.synthesize_speech(
+        input=synthesis_input, voice=voice, audio_config=audio_config
+    )
+    with open("output.mp3", "wb") as out:
+        out.write(response.audio_content)
+        print('เสียงพูดถูกบันทึกไว้ที่ output.mp3')
+
+def train_model():
+    """ฝึกโมเดล Machine Learning ด้วยข้อมูลที่รวบรวมมา"""
+    df = pd.read_csv('conversation_data.csv')
+    if not df.empty:
+        X = df['query']
+        y = df['result']
+        
+        vectorizer = CountVectorizer()
+        X = vectorizer.fit_transform(X)
+        
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+        model = MultinomialNB()
+        model.fit(X_train, y_train)
+        
+        return model, vectorizer
+    else:
+        return None, None
+
+def predict_response(model, vectorizer, query):
+    """ทำนายผลลัพธ์โดยใช้โมเดลที่ฝึกไว้"""
+    X_query = vectorizer.transform([query])
+    predicted_result = model.predict(X_query)
+    return predicted_result[0]
+
+if __name__ == "__main__":
+    # โหลดโมเดลถ้ามีข้อมูลฝึกอยู่
+    model, vectorizer = train_model()
+
+    while True:
+        query = recognize_speech()
+        if query:
+            if model and vectorizer:
+                result = predict_response(model, vectorizer, query)
+            else:
+                result = search_google(query)
+            
+            speak_text(result)
+
+            # เก็บข้อมูลการสนทนา
+            data.append({'query': query, 'result': result})
+            df = pd.DataFrame(data)
+            df.to_csv('conversation_data.csv', index=False)
+
+            # รับคำตอบจากผู้ใช้เพื่อปรับปรุงโมเดล
+            feedback = input("ผลลัพธ์ถูกต้องหรือไม่ (Y/N): ").strip().lower()
+            if feedback == 'y':
+                tokens += 1
+                print(f"Token ของคุณ: {tokens}")
+            elif feedback == 'n':
+                tokens -= 1
+                print(f"Token ของคุณ: {tokens}")
+                print("ลองค้นหาใหม่...")
+                continue  # กลับไปถามคำถามเดิม
+            
+            # อัปเดตโมเดลด้วยข้อมูลใหม่ที่ได้รับ
+            model, vectorizer = train_model()
