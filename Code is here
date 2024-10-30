@@ -1,55 +1,74 @@
+import openai
+import requests
 import speech_recognition as sr
-from googleapiclient.discovery import build
-from google.cloud import texttospeech
+import os
+import webbrowser
 
-# ตั้งค่าสำหรับ Google Custom Search API และ Text-to-Speech
-CSE_API_KEY = 'YOUR_CSE_API_KEY'
-CSE_ENGINE_ID = 'YOUR_CSE_ENGINE_ID'
-TTS_CLIENT = texttospeech.TextToSpeechClient()
+# ใส่ OpenAI API key และ ElevenLabs API key
+openai.api_key = "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"
+elevenlabs_api_key = "sk_f8ab72029bcc66f203428cb1c524966267212026fdb75cd6"
 
-def recognize_speech():
-    """รับเสียงพูดจากผู้ใช้และแปลงเป็นข้อความ"""
+# ฟังก์ชันแปลงเสียงเป็นข้อความด้วย OpenAI Whisper
+def speech_to_text():
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
-        print("พูดอะไรก็ได้...")
+        print("พูดสิ่งที่ต้องการค้นหา:")
         audio = recognizer.listen(source)
 
     try:
-        query = recognizer.recognize_google(audio, language='th')  # ตั้งค่าภาษาเป็นไทย
-        print(f"คุณพูดว่า: {query}")
-        return query
-    except sr.UnknownValueError:
-        print("ขอโทษครับ ไม่เข้าใจที่คุณพูด")
-        return None
-    except sr.RequestError as e:
-        print(f"เกิดข้อผิดพลาดในการเชื่อมต่อกับ Google Speech Recognition service; {e}")
-        return None
+        # บันทึกไฟล์เสียงเพื่อส่งไปยัง Whisper API
+        with open("audio.wav", "wb") as f:
+            f.write(audio.get_wav_data())
 
-def search_google(query):
-    """ส่งคำค้นหาไปยัง Google และรับผลลัพธ์"""
-    service = build("customsearch", "v1", developerKey=CSE_API_KEY)
-    result = service.cse().list(q=query, cx=CSE_ENGINE_ID).execute()
-    return result['items'][0]['snippet']  # ดึงข้อมูลสรุปจากผลลัพธ์แรก
+        # ใช้ OpenAI Whisper แปลงเสียงเป็นข้อความ
+        audio_file = open("audio.wav", "rb")
+        response = openai.Audio.transcribe("whisper-1", audio_file)
+        text = response["text"]
+        print(f"คุณพูดว่า: {text}")
+        return text
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาด: {str(e)}")
+        return ""
 
-def speak_text(text):
-    """แปลงข้อความเป็นเสียงพูด"""
-    synthesis_input = texttospeech.SynthesisInput(text=text)
-    voice = texttospeech.VoiceSelectionParams(
-        language_code="th-TH", ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
-    )
-    audio_config = texttospeech.AudioConfig(
-        audio_encoding=texttospeech.AudioEncoding.MP3
-    )
-    response = TTS_CLIENT.synthesize_speech(
-        input=synthesis_input, voice=voice, audio_config=audio_config
-    )
-    with open("output.mp3", "wb") as out:
-        out.write(response.audio_content)
-        print('เสียงพูดถูกบันทึกไว้ที่ output.mp3')
+# ฟังก์ชันค้นหาข้อความใน Google
+def text_to_search(text):
+    if text:
+        url = f"https://www.google.com/search?q={text}"
+        webbrowser.open(url)
+        return url
+    return ""
 
+# ฟังก์ชันแปลงข้อความเป็นเสียงด้วย ElevenLabs API
+def text_to_speech(text):
+    if text:
+        url = "https://api.elevenlabs.io/v1/text-to-speech/bIHbv24MWmeRgasZH58o"  # ใช้ Voice ID ที่คุณระบุ
+        headers = {
+            "xi-api-key": elevenlabs_api_key,
+            "Content-Type": "application/json"
+        }
+        data = {
+            "text": text,
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.5
+            }
+        }
+
+        response = requests.post(url, headers=headers, json=data)
+
+        if response.status_code == 200:
+            with open("output.mp3", "wb") as f:
+                f.write(response.content)
+            os.system("mpg321 output.mp3")  # เล่นไฟล์เสียง
+        else:
+            print("ไม่สามารถแปลงข้อความเป็นเสียงได้")
+    else:
+        print("ไม่มีข้อความสำหรับแปลงเป็นเสียง")
+
+# Main function
 if __name__ == "__main__":
-    while True:
-        query = recognize_speech()
-        if query:
-            result = search_google(query)
-            speak_text(result)
+    text = speech_to_text()  # แปลงเสียงเป็นข้อความ
+    search_url = text_to_search(text)  # ค้นหาข้อความใน Google
+    if search_url:
+        response_text = f"คุณค้นหาคำว่า: {text} บน Google"
+        text_to_speech(response_text)  # แปลงข้อความเป็นเสียง
